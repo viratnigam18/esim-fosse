@@ -17,7 +17,7 @@
 #                Jayanth Tatineni, Anshul Verma
 #  ORGANIZATION: eSim Team, FOSSEE, IIT Bombay
 #       CREATED: Wednesday 15 July 2015 15:26
-#      REVISION: Friday 20 November 2026 01:30
+#      REVISION: Friday 20 November 2026 22:45
 #=============================================================================
 
 # All variables go here
@@ -37,37 +37,65 @@ error_exit()
 
 function checkAndFixEolSources
 {
-    echo "Checking APT repository sources for Ubuntu 25.04..."
-    # If Ubuntu 25.04 has reached EOL, archive.ubuntu.com returns 404
-    # Test if apt-get update triggers 404 errors on standard mirrors
+    echo "Checking APT repository reachability for Ubuntu 25.04..."
+    # Check if official Ubuntu archive mirrors return 404
     set +e
-    apt_check_output=$(sudo apt-get update 2>&1)
+    apt_check=$(sudo apt-get update 2>&1)
     set -e
 
-    if echo "$apt_check_output" | grep -qE "404[[:space:]]+Not Found|404"; then
-        echo "Standard repository mirrors returned 404 (End of Life reached)."
-        echo "Automatically migrating sources to old-releases.ubuntu.com..."
-
-        # Update /etc/apt/sources.list if present
-        if [ -f /etc/apt/sources.list ]; then
-            [ ! -f /etc/apt/sources.list.bak ] && sudo cp /etc/apt/sources.list /etc/apt/sources.list.bak
-            sudo sed -i 's|http://\(.*\).ubuntu.com/ubuntu|http://old-releases.ubuntu.com/ubuntu|g' /etc/apt/sources.list
-            sudo sed -i 's|https://\(.*\).ubuntu.com/ubuntu|https://old-releases.ubuntu.com/ubuntu|g' /etc/apt/sources.list
+    if echo "$apt_check" | grep -qE "(archive\.ubuntu\.com|security\.ubuntu\.com).*404"; then
+        echo ""
+        echo "================================================================="
+        echo "NOTICE: Ubuntu 25.04 reached official End-of-Life on 15 Jan 2026."
+        echo "Official packages have been archived to old-releases.ubuntu.com."
+        echo "================================================================="
+        read -r -p "Migrate official Ubuntu mirrors to old-releases.ubuntu.com? (yes/no): " eol_consent
+        if [[ ! "$eol_consent" =~ ^([Yy][Ee][Ss]|[Yy])$ ]]; then
+            echo "Skipping repository migration. Proceeding with existing sources..."
+            return 0
         fi
 
-        # Update deb822 style sources under /etc/apt/sources.list.d/
+        backup_ts=$(date +%Y%m%d_%H%M%S)
+        modified_files=()
+
+        # Update /etc/apt/sources.list if it references standard ubuntu mirrors
+        if [ -f /etc/apt/sources.list ] && grep -qE "archive\.ubuntu\.com|security\.ubuntu\.com" /etc/apt/sources.list; then
+            sudo cp /etc/apt/sources.list "/etc/apt/sources.list.bak.${backup_ts}"
+            sudo sed -i 's|http://\(.*\).ubuntu.com/ubuntu|http://old-releases.ubuntu.com/ubuntu|g' /etc/apt/sources.list
+            sudo sed -i 's|https://\(.*\).ubuntu.com/ubuntu|https://old-releases.ubuntu.com/ubuntu|g' /etc/apt/sources.list
+            modified_files+=("/etc/apt/sources.list")
+        fi
+
+        # Update official Ubuntu sources under /etc/apt/sources.list.d/ (e.g. ubuntu.sources)
         for src in /etc/apt/sources.list.d/*.sources; do
-            if [ -f "$src" ]; then
-                [ ! -f "${src}.bak" ] && sudo cp "$src" "${src}.bak"
+            if [ -f "$src" ] && grep -qE "archive\.ubuntu\.com|security\.ubuntu\.com" "$src"; then
+                sudo cp "$src" "${src}.bak.${backup_ts}"
                 sudo sed -i 's|http://\(.*\).ubuntu.com/ubuntu|http://old-releases.ubuntu.com/ubuntu|g' "$src"
                 sudo sed -i 's|https://\(.*\).ubuntu.com/ubuntu|https://old-releases.ubuntu.com/ubuntu|g' "$src"
+                modified_files+=("$src")
             fi
         done
 
-        echo "Updated sources to old-releases. Refreshing apt index..."
+        echo "Validating repository migration..."
+        set +e
         sudo apt-get update -y
+        update_status=$?
+        set -e
+
+        if [ $update_status -ne 0 ]; then
+            echo "Error: apt update failed after migration. Rolling back repository sources..."
+            for f in "${modified_files[@]}"; do
+                if [ -f "${f}.bak.${backup_ts}" ]; then
+                    sudo cp "${f}.bak.${backup_ts}" "$f"
+                    echo "Restored $f from backup."
+                fi
+            done
+            return 1
+        else
+            echo "Repository migration verified successfully."
+        fi
     else
-        echo "APT sources are functional and reachable."
+        echo "APT repository sources are functional."
     fi
 }
 
@@ -94,7 +122,6 @@ function installNghdl
 {
     echo "Installing NGHDL..........................."
 
-    # Check for archive in local directory or fallback locations
     target_zip=""
     if [ -f "nghdl.zip" ]; then
         target_zip="nghdl.zip"
@@ -103,36 +130,35 @@ function installNghdl
     fi
 
     if [ -z "$target_zip" ]; then
-        echo "nghdl.zip not found in current directory. Skipping NGHDL extraction..."
+        echo "nghdl.zip not found. Skipping NGHDL extraction..."
         return 0
     fi
 
-    # Extract nghdl using unzip or Python zipfile fallback
     if command -v unzip >/dev/null 2>&1; then
         unzip -o "$target_zip"
     else
-        echo "unzip not found; extracting via python3 zipfile module..."
+        echo "unzip command not found; using python3 zipfile fallback..."
         python3 -m zipfile -e "$target_zip" .
     fi
 
     if [ ! -d "nghdl" ]; then
-        echo "Extraction of NGHDL failed. Skipping..."
+        echo "NGHDL folder not found after extraction. Skipping..."
         return 0
     fi
 
     cd nghdl/ || return 1
     chmod +x install-nghdl.sh
 
-    # Adapt NGHDL installer for Ubuntu 25.04 & LLVM 18 compatibility
+    # Adapt NGHDL dispatcher for Ubuntu 25.04
     if [ -f "install-nghdl.sh" ] && ! grep -q '"25.04"' install-nghdl.sh; then
         echo "Configuring NGHDL dispatcher for Ubuntu 25.04..."
         sed -i 's/"24.04")/"24.04" | "25.04")/g' install-nghdl.sh
     fi
 
-    # Adapt NGHDL 24.04 child script for Ubuntu 25.04:
-    # 1. libcanberra-gtk-module -> libcanberra-gtk3-module
-    # 2. llvm/llvm-dev -> llvm-18 llvm-18-dev clang-18
-    # 3. llvm-config -> llvm-config-18
+    # Adapt NGHDL child script for Ubuntu 25.04 toolchain requirements:
+    # 1. libcanberra-gtk3-module replacing obsolete libcanberra-gtk-module
+    # 2. llvm-18, llvm-18-dev, clang-18 replacing generic llvm
+    # 3. --with-llvm-config=/usr/bin/llvm-config-18
     for child in install-nghdl-scripts/install-nghdl-24.04.sh install-nghdl-scripts/install-nghdl-25.04.sh; do
         if [ -f "$child" ]; then
             sed -i 's/libcanberra-gtk-module libcanberra-gtk3-module/libcanberra-gtk3-module/g' "$child"
@@ -141,7 +167,6 @@ function installNghdl
         fi
     done
 
-    # If install-nghdl-25.04.sh doesn't exist, create it from updated 24.04 script
     if [ -f "install-nghdl-scripts/install-nghdl-24.04.sh" ] && [ ! -f "install-nghdl-scripts/install-nghdl-25.04.sh" ]; then
         cp install-nghdl-scripts/install-nghdl-24.04.sh install-nghdl-scripts/install-nghdl-25.04.sh
     fi
@@ -270,9 +295,16 @@ function installDependency
     echo "Installing system Python packages via APT..."
     sudo apt-get install -y python3-psutil python3-pyqt5 python3-matplotlib python3-setuptools python3-pip
 
-    # Dependencies for GHDL, LLVM 18 and GTK modules
+    # Provision LLVM 18 for GHDL compiler backend
     echo "Installing GHDL and LLVM 18 dependencies..."
-    sudo apt-get install -y libcanberra-gtk3-module llvm-18 llvm-18-dev clang-18 2>/dev/null || true
+    sudo apt-get install -y libcanberra-gtk3-module llvm-18 llvm-18-dev clang-18
+
+    # Verify toolchain binary availability
+    if [ -x "/usr/bin/llvm-config-18" ]; then
+        echo "Verified LLVM 18 configuration tool: /usr/bin/llvm-config-18"
+    else
+        echo "Warning: /usr/bin/llvm-config-18 is not currently available."
+    fi
 
     # Install NgVeri Dependencies inside virtual environment
     echo "Installing EDA helper packages in virtualenv..."
@@ -291,11 +323,11 @@ function copyKicadLibrary
     # Extract custom KiCad Library
     if [ -f "library/kicadLibrary.tar.xz" ]; then
         tar -xJf library/kicadLibrary.tar.xz
+    elif [ -f "kicadLibrary.tar.xz" ]; then
+        tar -xJf kicadLibrary.tar.xz
     else
-        echo "Warning: library/kicadLibrary.tar.xz not found. Checking current directory..."
-        if [ -f "kicadLibrary.tar.xz" ]; then
-            tar -xJf kicadLibrary.tar.xz
-        fi
+        echo "Warning: kicadLibrary.tar.xz not found. Skipping library extraction..."
+        return 0
     fi
 
     # FIX (H-02): KiCad 8.0 configuration directory resolution on Ubuntu 25.04
@@ -303,20 +335,29 @@ function copyKicadLibrary
     kicad_user_config="$HOME/.config/kicad/$kicad_version"
 
     if [ -d "$kicad_user_config" ]; then
-        echo "KiCad config folder already exists: $kicad_user_config"
+        echo "KiCad config folder exists: $kicad_user_config"
     else
         echo "$kicad_user_config does not exist; creating directory..."
         mkdir -p "$kicad_user_config"
     fi
 
-    # Copy symbol table for eSim custom symbols into KiCad 8.0 configuration directory
+    # Safely merge or copy sym-lib-table preserving user data
     if [ -f "kicadLibrary/template/sym-lib-table" ]; then
-        cp kicadLibrary/template/sym-lib-table "$kicad_user_config/"
-        echo "symbol table copied into $kicad_user_config/"
-
-        # Also copy into 6.0 path if directory exists for backward compatibility
-        if [ -d "$HOME/.config/kicad/6.0" ]; then
-            cp kicadLibrary/template/sym-lib-table "$HOME/.config/kicad/6.0/" 2>/dev/null || true
+        target_table="$kicad_user_config/sym-lib-table"
+        if [ -f "$target_table" ]; then
+            # Backup existing table before modification
+            cp "$target_table" "${target_table}.bak.$(date +%Y%m%d_%H%M%S)"
+            # If eSim libraries are not yet registered, append them
+            if ! grep -q "eSim" "$target_table"; then
+                # Append eSim library entries into existing symbol table
+                grep "(lib " "kicadLibrary/template/sym-lib-table" >> "$target_table" || true
+                echo "Merged eSim symbol entries into existing $target_table"
+            else
+                echo "eSim symbols already present in $target_table"
+            fi
+        else
+            cp "kicadLibrary/template/sym-lib-table" "$target_table"
+            echo "Installed sym-lib-table into $kicad_user_config/"
         fi
     fi
 
@@ -454,7 +495,7 @@ if [ "$option" == "--install" ]; then
         exit 0
     fi
 
-    # Step 1: Check and resolve repository EOL status if needed
+    # Step 1: Check and resolve repository EOL reachability safely
     checkAndFixEolSources
 
     # Step 2: Call installation functions sequentially
@@ -471,25 +512,36 @@ if [ "$option" == "--install" ]; then
     echo "or double click on \"eSim\" icon placed on Desktop"
 
 elif [ "$option" == "--uninstall" ]; then
-    echo -n "Are you sure? It will remove eSim completely including KiCad, Makerchip, NGHDL and SKY130 PDK along with their models and libraries (y/n):"
+    echo -n "Are you sure? It will remove eSim, NGHDL and SKY130 PDK (y/n): "
     read -r getConfirmation
     if [ "$getConfirmation" == "y" -o "$getConfirmation" == "Y" ]; then
-        echo "Removing eSim............................"
+        echo "Removing eSim application and launchers..."
         sudo rm -rf "$HOME/.esim" "$HOME/Desktop/esim.desktop" /usr/bin/esim /usr/share/applications/esim.desktop
-        echo "Removing KiCad..........................."
-        sudo apt purge -y kicad kicad-footprints kicad-libraries kicad-symbols kicad-templates
-        sudo rm -rf /usr/share/kicad
-        sudo rm -f /etc/apt/sources.list.d/kicad*
-        rm -rf "$HOME/.config/kicad/8.0/sym-lib-table"
-        rm -rf "$HOME/.config/kicad/6.0"
 
-        echo "Removing Virtual env......................."
+        echo "Cleaning KiCad eSim library registrations safely..."
+        # Safely preserve user's KiCad settings and non-eSim libraries
+        for v in 8.0 6.0; do
+            sym_table="$HOME/.config/kicad/$v/sym-lib-table"
+            if [ -f "$sym_table" ]; then
+                cp "$sym_table" "${sym_table}.bak.$(date +%Y%m%d_%H%M%S)"
+                # Remove only eSim-specific library lines
+                grep -v -E "eSim|kicadLibrary" "$sym_table" > "${sym_table}.tmp" && mv "${sym_table}.tmp" "$sym_table"
+                echo "Removed eSim entries from $sym_table (backup preserved)."
+            fi
+        done
+
+        # Remove eSim custom symbol files from /usr/share/kicad/symbols without deleting the directory
+        if [ -d "/usr/share/kicad/symbols" ]; then
+            sudo find /usr/share/kicad/symbols/ -maxdepth 1 -name "eSim*" -exec rm -rf {} + 2>/dev/null || true
+        fi
+
+        echo "Removing Virtual env..."
         sudo rm -rf "$config_dir/env"
 
-        echo "Removing SKY130 PDK......................"
+        echo "Removing SKY130 PDK..."
         sudo rm -rf /usr/share/local/sky130_fd_pr
 
-        echo "Removing NGHDL..........................."
+        echo "Removing NGHDL..."
         rm -rf library/modelParamXML/Nghdl/*
         rm -rf library/modelParamXML/Ngveri/*
         if [ -d "nghdl" ]; then

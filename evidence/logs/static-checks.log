@@ -23,7 +23,7 @@ test_ubuntu_25_04_detection (test_esim_diagnostics.TestESimDiagnostics.test_ubun
 Verifies correct parsing of Ubuntu 25.04 os-release. ... ok
 
 ----------------------------------------------------------------------
-Ran 9 tests in 3.981s
+Ran 9 tests in 4.552s
 
 OK
 
