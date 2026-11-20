@@ -17,7 +17,7 @@
 #                Jayanth Tatineni, Anshul Verma
 #  ORGANIZATION: eSim Team, FOSSEE, IIT Bombay
 #       CREATED: Wednesday 15 July 2015 15:26
-#      REVISION: Friday 20 November 2026 01:20
+#      REVISION: Friday 20 November 2026 01:30
 #=============================================================================
 
 # All variables go here
@@ -33,6 +33,42 @@ error_exit()
     echo -e "\n\nError! Kindly resolve above error(s) and try again."
     echo -e "\nAborting Installation...\n"
     exit 1
+}
+
+function checkAndFixEolSources
+{
+    echo "Checking APT repository sources for Ubuntu 25.04..."
+    # If Ubuntu 25.04 has reached EOL, archive.ubuntu.com returns 404
+    # Test if apt-get update triggers 404 errors on standard mirrors
+    set +e
+    apt_check_output=$(sudo apt-get update 2>&1)
+    set -e
+
+    if echo "$apt_check_output" | grep -qE "404[[:space:]]+Not Found|404"; then
+        echo "Standard repository mirrors returned 404 (End of Life reached)."
+        echo "Automatically migrating sources to old-releases.ubuntu.com..."
+
+        # Update /etc/apt/sources.list if present
+        if [ -f /etc/apt/sources.list ]; then
+            [ ! -f /etc/apt/sources.list.bak ] && sudo cp /etc/apt/sources.list /etc/apt/sources.list.bak
+            sudo sed -i 's|http://\(.*\).ubuntu.com/ubuntu|http://old-releases.ubuntu.com/ubuntu|g' /etc/apt/sources.list
+            sudo sed -i 's|https://\(.*\).ubuntu.com/ubuntu|https://old-releases.ubuntu.com/ubuntu|g' /etc/apt/sources.list
+        fi
+
+        # Update deb822 style sources under /etc/apt/sources.list.d/
+        for src in /etc/apt/sources.list.d/*.sources; do
+            if [ -f "$src" ]; then
+                [ ! -f "${src}.bak" ] && sudo cp "$src" "${src}.bak"
+                sudo sed -i 's|http://\(.*\).ubuntu.com/ubuntu|http://old-releases.ubuntu.com/ubuntu|g' "$src"
+                sudo sed -i 's|https://\(.*\).ubuntu.com/ubuntu|https://old-releases.ubuntu.com/ubuntu|g' "$src"
+            fi
+        done
+
+        echo "Updated sources to old-releases. Refreshing apt index..."
+        sudo apt-get update -y
+    else
+        echo "APT sources are functional and reachable."
+    fi
 }
 
 function createConfigFile
@@ -57,14 +93,58 @@ function createConfigFile
 function installNghdl
 {
     echo "Installing NGHDL..........................."
-    if [ ! -f "nghdl.zip" ]; then
+
+    # Check for archive in local directory or fallback locations
+    target_zip=""
+    if [ -f "nghdl.zip" ]; then
+        target_zip="nghdl.zip"
+    elif [ -f "MacOS/nghdl.zip" ]; then
+        target_zip="MacOS/nghdl.zip"
+    fi
+
+    if [ -z "$target_zip" ]; then
         echo "nghdl.zip not found in current directory. Skipping NGHDL extraction..."
         return 0
     fi
 
-    unzip -o nghdl.zip
+    # Extract nghdl using unzip or Python zipfile fallback
+    if command -v unzip >/dev/null 2>&1; then
+        unzip -o "$target_zip"
+    else
+        echo "unzip not found; extracting via python3 zipfile module..."
+        python3 -m zipfile -e "$target_zip" .
+    fi
+
+    if [ ! -d "nghdl" ]; then
+        echo "Extraction of NGHDL failed. Skipping..."
+        return 0
+    fi
+
     cd nghdl/ || return 1
     chmod +x install-nghdl.sh
+
+    # Adapt NGHDL installer for Ubuntu 25.04 & LLVM 18 compatibility
+    if [ -f "install-nghdl.sh" ] && ! grep -q '"25.04"' install-nghdl.sh; then
+        echo "Configuring NGHDL dispatcher for Ubuntu 25.04..."
+        sed -i 's/"24.04")/"24.04" | "25.04")/g' install-nghdl.sh
+    fi
+
+    # Adapt NGHDL 24.04 child script for Ubuntu 25.04:
+    # 1. libcanberra-gtk-module -> libcanberra-gtk3-module
+    # 2. llvm/llvm-dev -> llvm-18 llvm-18-dev clang-18
+    # 3. llvm-config -> llvm-config-18
+    for child in install-nghdl-scripts/install-nghdl-24.04.sh install-nghdl-scripts/install-nghdl-25.04.sh; do
+        if [ -f "$child" ]; then
+            sed -i 's/libcanberra-gtk-module libcanberra-gtk3-module/libcanberra-gtk3-module/g' "$child"
+            sed -i 's/apt install -y llvm llvm-dev/apt install -y llvm-18 llvm-18-dev clang-18/g' "$child"
+            sed -i 's/--with-llvm-config=\/usr\/bin\/llvm-config/--with-llvm-config=\/usr\/bin\/llvm-config-18/g' "$child"
+        fi
+    done
+
+    # If install-nghdl-25.04.sh doesn't exist, create it from updated 24.04 script
+    if [ -f "install-nghdl-scripts/install-nghdl-24.04.sh" ] && [ ! -f "install-nghdl-scripts/install-nghdl-25.04.sh" ]; then
+        cp install-nghdl-scripts/install-nghdl-24.04.sh install-nghdl-scripts/install-nghdl-25.04.sh
+    fi
 
     # Do not trap on error of any command. Let NGHDL script handle its own errors.
     trap "" ERR
@@ -82,13 +162,20 @@ function installSky130Pdk
 {
     echo "Installing SKY130 PDK......................"
 
-    if [ ! -f "library/sky130_fd_pr.tar.xz" ]; then
-        echo "SKY130 archive library/sky130_fd_pr.tar.xz not found. Skipping PDK extraction..."
+    pdk_archive=""
+    if [ -f "library/sky130_fd_pr.tar.xz" ]; then
+        pdk_archive="library/sky130_fd_pr.tar.xz"
+    elif [ -f "sky130_fd_pr.tar.xz" ]; then
+        pdk_archive="sky130_fd_pr.tar.xz"
+    fi
+
+    if [ -z "$pdk_archive" ]; then
+        echo "SKY130 archive not found. Skipping PDK extraction..."
         return 0
     fi
 
     # Extract SKY130 PDK
-    tar -xJf library/sky130_fd_pr.tar.xz
+    tar -xJf "$pdk_archive"
 
     # Remove any previous sky130-fd-pr instance, if any
     sudo rm -rf /usr/share/local/sky130_fd_pr
@@ -167,10 +254,10 @@ function installDependency
     set -e      # Re-enable exit on error
     trap error_exit ERR
 
-    echo "Installing virtualenv......................."
-    sudo apt install -y python3-virtualenv
+    echo "Installing core dependencies (virtualenv, unzip, xterm)..."
+    sudo apt install -y python3-virtualenv unzip xterm
 
-    echo "Creating virtual environment to isolate packages..."
+    echo "Creating virtual environment with system site packages..."
     # FIX (H-06): Use --system-site-packages so system PyQt5/Matplotlib are visible inside virtualenv
     virtualenv --system-site-packages "$config_dir/env"
 
@@ -180,36 +267,19 @@ function installDependency
     echo "Upgrading Pip.............................."
     pip install --upgrade pip
 
-    echo "Installing Xterm..........................."
-    sudo apt-get install -y xterm
+    echo "Installing system Python packages via APT..."
+    sudo apt-get install -y python3-psutil python3-pyqt5 python3-matplotlib python3-setuptools python3-pip
 
-    echo "Installing Psutil.........................."
-    sudo apt-get install -y python3-psutil
+    # Dependencies for GHDL, LLVM 18 and GTK modules
+    echo "Installing GHDL and LLVM 18 dependencies..."
+    sudo apt-get install -y libcanberra-gtk3-module llvm-18 llvm-18-dev clang-18 2>/dev/null || true
 
-    echo "Installing PyQt5..........................."
-    sudo apt-get install -y python3-pyqt5
+    # Install NgVeri Dependencies inside virtual environment
+    echo "Installing EDA helper packages in virtualenv..."
+    pip3 install watchdog makerchip-app sandpiper-saas
 
-    echo "Installing Matplotlib......................"
-    sudo apt-get install -y python3-matplotlib
-
-    echo "Installing Setuptools..................."
-    sudo apt-get install -y python3-setuptools
-
-    # Install NgVeri Dependencies
-    echo "Installing Pip3............................"
-    sudo apt install -y python3-pip
-
-    echo "Installing Watchdog........................"
-    pip3 install watchdog
-
-    echo "Installing Hdlparse........................"
+    echo "Installing Hdlparse..."
     pip3 install --upgrade https://github.com/hdl/pyhdlparser/tarball/master || pip3 install hdlparse
-
-    echo "Installing Makerchip......................."
-    pip3 install makerchip-app
-
-    echo "Installing SandPiper Saas.................."
-    pip3 install sandpiper-saas
 
     # Verify or fallback-install Matplotlib and PyQt5 inside venv if not available from system
     python3 -c "import matplotlib" 2>/dev/null || pip3 install matplotlib || true
@@ -384,7 +454,10 @@ if [ "$option" == "--install" ]; then
         exit 0
     fi
 
-    # Calling installation functions sequentially
+    # Step 1: Check and resolve repository EOL status if needed
+    checkAndFixEolSources
+
+    # Step 2: Call installation functions sequentially
     createConfigFile
     installDependency
     installKicad
