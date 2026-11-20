@@ -1,0 +1,74 @@
+=== Static Syntax Checks ===
+install-eSim.sh syntax check passed
+install-eSim-25.04.sh syntax check passed
+
+=== Python Unit Test Suite ===
+test_check_system_commands (test_esim_diagnostics.TestESimDiagnostics.test_check_system_commands)
+Verifies command availability checks return boolean flags. ... ok
+test_format_text_report (test_esim_diagnostics.TestESimDiagnostics.test_format_text_report)
+Verifies formatting function outputs non-empty text table. ... ok
+test_get_os_info_structure (test_esim_diagnostics.TestESimDiagnostics.test_get_os_info_structure)
+Verifies OS info dict contains all required keys. ... ok
+test_get_python_info (test_esim_diagnostics.TestESimDiagnostics.test_get_python_info)
+Verifies python version inspection returns valid structure. ... ok
+test_inspect_esim_environment_mocked (test_esim_diagnostics.TestESimDiagnostics.test_inspect_esim_environment_mocked)
+Verifies eSim environment inspector structure. ... ok
+test_inspect_kicad_mocked (test_esim_diagnostics.TestESimDiagnostics.test_inspect_kicad_mocked)
+Verifies KiCad inspector parses version directories correctly. ... ok
+test_json_serialization (test_esim_diagnostics.TestESimDiagnostics.test_json_serialization)
+Verifies diagnostic output serializes to valid JSON. ... ok
+test_run_diagnostics_aggregation (test_esim_diagnostics.TestESimDiagnostics.test_run_diagnostics_aggregation)
+Verifies complete diagnostics aggregator. ... ok
+test_ubuntu_25_04_detection (test_esim_diagnostics.TestESimDiagnostics.test_ubuntu_25_04_detection)
+Verifies correct parsing of Ubuntu 25.04 os-release. ... ok
+
+----------------------------------------------------------------------
+Ran 9 tests in 3.759s
+
+OK
+
+=== System Diagnostics Report ===
+=================================================================
+           eSim 2.5 System Diagnostics & Audit Report           
+=================================================================
+
+[1] Operating System
+  Distribution    : ubuntu (noble)
+  Version         : 24.04
+  Architecture    : x86_64
+  Ubuntu 25.04    : NO
+
+[2] Python Runtime & Dependencies
+  Python Version  : 3.12.3
+  Virtualenv Active: NO
+  - PyQt5         : MISSING
+  - matplotlib    : MISSING
+  - psutil        : MISSING
+  - watchdog      : MISSING
+  - setuptools    : AVAILABLE
+  - hdlparse      : MISSING
+
+[3] Required Toolchain Binaries
+  - bash          : FOUND
+  - kicad         : NOT FOUND
+  - ngspice       : NOT FOUND
+  - xterm         : NOT FOUND
+  - virtualenv    : NOT FOUND
+  - git           : FOUND
+  - tar           : FOUND
+  - unzip         : NOT FOUND
+
+[4] KiCad Integration
+  Installed       : NO
+  Config Paths Detected: None found under ~/.config/kicad
+
+[5] eSim Configuration & Launchers
+  Config Dir Exists: NO
+  config.ini Exists: NO
+  Virtualenv Exists: NO
+  Launcher Script  : NO (/usr/bin/esim)
+  Desktop App File : NO
+
+[6] PDK & Sub-tools
+  SKY130 PDK       : NOT FOUND
+=================================================================
